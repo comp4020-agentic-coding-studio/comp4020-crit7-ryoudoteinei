@@ -1,8 +1,34 @@
 ---
-import { listMessages } from "../lib/db";
+import { randomUUID } from "node:crypto";
+import { listSavedSlots } from "../lib/db";
+import { clashingIds, DAYS, formatTime, overlaps } from "../lib/timetable";
+import { validVisitorId, VISITOR_COOKIE } from "../lib/visitor";
 import "../styles.css";
 
-const messages = listMessages();
+const existingOwner = Astro.cookies.get(VISITOR_COOKIE)?.value;
+const owner = validVisitorId(existingOwner) ? existingOwner : randomUUID();
+if (!validVisitorId(existingOwner)) {
+  Astro.cookies.set(VISITOR_COOKIE, owner, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: Astro.url.protocol === "https:",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+  });
+}
+
+const slots = listSavedSlots(owner);
+const clashes = clashingIds(slots);
+const query = Astro.url.searchParams;
+const error = query.get("error");
+const notice = query.has("saved")
+  ? "Your time was saved. Reload this page to see that it stays in your draft."
+  : query.has("removed")
+    ? "The time was removed from your draft."
+    : null;
+const dayNames: Record<string, string> = {
+  Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday",
+};
 ---
 
 <!doctype html>
@@ -10,44 +36,85 @@ const messages = listMessages();
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>COMP4020 prototype</title>
+    <meta name="description" content="An unofficial timetable planner for ANU students. Save a draft week and spot teaching time clashes." />
+    <title>Slotwise — make room for your week</title>
   </head>
   <body>
-    <nav aria-label="site">
-      <a href="/">Guestbook</a>
-      <a href="/readme/">About</a>
-    </nav>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="wordmark" href="/" aria-label="Slotwise home"><span class="mark" aria-hidden="true">S<span>·</span>W</span><span>slotwise<span class="wordmark-period">.</span></span></a>
+        <nav aria-label="Site navigation">
+          <a href="#planner">Make a draft</a>
+          <a href="#your-week">Your week</a>
+          <a href="/readme/">About this prototype</a>
+        </nav>
+        <span class="unofficial">UNOFFICIAL STUDENT TOOL <span aria-hidden="true">↗</span></span>
+      </div>
+    </header>
+
     <main>
-      <h1>Guestbook</h1>
-      <p>
-        A minimal full-stack starter: messages live in SQLite on the machine's
-        volume (state survives a reload and a redeploy), and new messages
-        appear in every open tab over a server-sent-events stream — open this
-        page twice and sign it in one. Replace all of this with your own
-        prototype.
-      </p>
-      <form method="post" action="/api/messages">
-        <label for="body">Leave a message</label>
-        <input id="body" name="body" required maxlength="500" />
-        <button>Sign</button>
-      </form>
-      <ul id="messages">
-        {messages.map((message) => <li>{message.body}</li>)}
-      </ul>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-dash" aria-hidden="true"></span> A BETTER WAY TO PLAN YOUR CLASSES</p>
+          <h1 id="hero-title">YOUR WEEK.<br /><em>YOUR CALL.</em></h1>
+          <p class="hero-lede">Try the timetable before committing to it. Put your tutorial and lab times together, spot a clash, and keep a draft you can come back to.</p>
+          <div class="hero-actions"><a class="button button-dark" href="#planner">Build your draft <span aria-hidden="true">↗</span></a><a class="quiet-link" href="#how-it-works">How this works <span aria-hidden="true">↓</span></a></div>
+          <p class="hero-caption">A SMALLER ANSWER TO A VERY FAMILIAR PROBLEM.</p>
+        </div>
+        <div class="hero-poster" aria-hidden="true">
+          <div class="poster-top"><span>THE WEEK AHEAD</span><span>MON—FRI / 2026</span></div>
+          <div class="poster-grid">
+            <div class="poster-row"><span>MON</span><b class="block forest-block">COMP4020 <small>Tutorial / 15:30</small></b></div>
+            <div class="poster-row"><span>TUE</span><b class="block line-block">ROOM FOR MORE</b></div>
+            <div class="poster-row"><span>WED</span><b class="block peach-block">YOUR CHOICE <small>Review the overlap</small></b></div>
+            <div class="poster-row"><span>THU</span><b class="block line-block">A LITTLE SPACE</b></div>
+            <div class="poster-row"><span>FRI</span><b class="block line-block">YOUR CALL</b></div>
+          </div>
+          <div class="poster-bottom"><span>NOT AN ALLOCATION.</span><strong>A PLAN.</strong></div>
+          <span class="poster-stamp">SAVED<br />FOR LATER</span>
+        </div>
+      </section>
+
+      <div class="status-strip" aria-label="Draft status">
+        <span><strong>{slots.length}</strong> {slots.length === 1 ? "time" : "times"} in your draft</span>
+        <span><strong>{clashes.size}</strong> {clashes.size === 1 ? "time needs" : "times need"} a clash check</span>
+        <span class="strip-caption">Made for planning. Official allocation still happens in MyTimetable.</span>
+      </div>
+
+      <section id="planner" class="planner-section" aria-labelledby="planner-title">
+        <div class="section-intro"><p class="eyebrow">01 / START WITH ONE TIME</p><h2 id="planner-title">Put a class on your week.</h2><p>Enter an activity you are considering. We keep a private draft for this browser and show where its times overlap.</p></div>
+        <div class="planner-panel">
+          <div class="panel-label"><span>ADD A TEACHING TIME</span><span>01—04 / THE DETAILS</span></div>
+          {notice && <p class="notice" role="status">{notice}</p>}
+          {error && <p class="notice notice-error" role="alert">{error === "session" ? "Open this page again to start your browser draft." : error === "slot" ? "That saved time was not found in this draft." : error}</p>}
+          <form method="post" action="/api/slots" class="slot-form">
+            <div class="field"><label for="courseCode">Course code <span>01</span></label><input id="courseCode" name="courseCode" type="text" inputmode="text" placeholder="COMP4020" pattern="[A-Za-z]{4}[0-9]{4}" maxlength="8" autocapitalize="characters" required /><small>Four letters and four numbers.</small></div>
+            <div class="field"><label for="activity">Activity <span>02</span></label><input id="activity" name="activity" type="text" placeholder="Tutorial 02" minlength="2" maxlength="60" required /><small>Use the label you see in MyTimetable.</small></div>
+            <div class="field"><label for="day">Day <span>03</span></label><select id="day" name="day" required>{DAYS.map((day) => <option value={day}>{dayNames[day]}</option>)}</select><small>Each saved time repeats weekly.</small></div>
+            <div class="time-pair"><div class="field"><label for="start">Starts <span>04</span></label><input id="start" name="start" type="time" value="15:30" required /></div><div class="field"><label for="end">Ends <span>05</span></label><input id="end" name="end" type="time" value="17:00" required /></div></div>
+            <div class="form-footer"><p>Your draft records a preference. It does not book a class.</p><button class="button button-dark" type="submit">Save this time <span aria-hidden="true">↗</span></button></div>
+          </form>
+        </div>
+      </section>
+
+      <section id="your-week" class="week-section" aria-labelledby="week-title">
+        <div class="section-heading"><div><p class="eyebrow">02 / YOUR SAVED WEEK</p><h2 id="week-title">See the whole picture.</h2></div><p>Saved in SQLite. Reload the page: your choices remain in this browser.</p></div>
+        {clashes.size > 0 && <div class="conflict-summary" role="status"><strong>{clashes.size} overlapping {clashes.size === 1 ? "time" : "times"}.</strong><span>Look at the marked cards below and decide which choice belongs in your week.</span></div>}
+        <div class="week-grid">
+          {DAYS.map((day) => {
+            const entries = slots.filter((slot) => slot.day === day);
+            return <section class="day-column" aria-label={dayNames[day]}><div class="day-heading"><span>{dayNames[day]}</span><span>{entries.length ? String(entries.length).padStart(2, "0") : "—"}</span></div>
+              {entries.length ? <ul class="day-slots">{entries.map((slot) => {
+                const neighbours = slots.filter((other) => other.id !== slot.id && overlaps(slot, other));
+                return <li class:list={["slot-card", { "slot-clash": clashes.has(slot.id) }]}><div class="slot-card-top"><span>{formatTime(slot.startMinute)}–{formatTime(slot.endMinute)}</span>{neighbours.length ? <b>CLASH</b> : <b class="clear-tag">CLEAR</b>}</div><strong>{slot.courseCode}</strong><p>{slot.activity}</p>{neighbours.length > 0 && <p class="clash-copy">Overlaps {neighbours.map((other) => other.courseCode + " " + other.activity).join(", ")}.</p>}<form method="post" action="/api/delete-slot"><input type="hidden" name="id" value={slot.id} /><button class="remove-link" type="submit" aria-label={`Remove ${slot.courseCode} ${slot.activity} from your draft`}>Remove <span aria-hidden="true">×</span></button></form></li>;
+              })}</ul> : <p class="empty-day">Your time is open.</p>}</section>;
+          })}
+        </div>
+        {!slots.length && <p class="empty-hint">Start with one activity above. Add another on the same day to see how clashes are shown.</p>}
+      </section>
+
+      <section id="how-it-works" class="how-section" aria-labelledby="how-title"><div><p class="eyebrow">03 / THE IMPORTANT LINE</p><h2 id="how-title">Plan here.<br /><em>Allocate there.</em></h2></div><div><p>Slotwise helps you compare teaching times and remember your preferred week. It uses the course code and time details you enter; it has no live access to ANU enrolments, class capacity or waitlists.</p><p>When your draft makes sense, use the <a href="https://www.anu.edu.au/students/program-administration/timetabling/01-access-and-support-for-mytimetable" rel="noreferrer">official ANU MyTimetable guide</a> to make or adjust the real allocation.</p><a class="quiet-link" href="/readme/">Read about the project <span aria-hidden="true">↗</span></a></div></section>
     </main>
-    <script>
-      // The live half of the demo: subscribe to the SSE stream and prepend
-      // messages as they arrive. The form itself needs none of this — its
-      // POST + redirect re-renders the submitting tab from SQLite; this
-      // stream is how every other tab finds out.
-      const list = document.querySelector("#messages");
-      const source = new EventSource("/api/events");
-      source.addEventListener("message", (event) => {
-        const message = JSON.parse(event.data);
-        const item = document.createElement("li");
-        item.textContent = message.body;
-        list?.prepend(item);
-      });
-    </script>
+    <footer class="site-footer"><span>Slotwise / A COMP4020 prototype</span><span>Unaffiliated with ANU's official allocation system</span><a href="#hero-title">Back to top ↑</a></footer>
   </body>
 </html>
