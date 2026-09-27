@@ -23,10 +23,12 @@ RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y build-essential pkg-config python-is-python3
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY scripts/install-hooks.ts ./scripts/install-hooks.ts
 RUN pnpm install --frozen-lockfile --prod=false
 
 COPY . .
 RUN pnpm run build
+RUN pnpm exec vitest run spec
 RUN pnpm prune --prod
 
 # --- runtime stage: just the built server and its production deps ----------

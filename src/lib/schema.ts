@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { int, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, int, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 // The schema is the ground truth for the database. To change it: edit here,
 // run `pnpm db:generate` to turn the diff into a migration under drizzle/,
@@ -16,3 +16,18 @@ export const messages = sqliteTable("messages", {
 });
 
 export type Message = typeof messages.$inferSelect;
+
+// A saved draft belongs to one anonymous browser, not a public timetable.
+// Keep the starter's messages table and migration intact for existing volumes.
+export const savedSlots = sqliteTable("saved_slots", {
+  id: int().primaryKey({ autoIncrement: true }),
+  owner: text().notNull(),
+  courseCode: text("course_code").notNull(),
+  activity: text().notNull(),
+  day: text().notNull(),
+  startMinute: int("start_minute").notNull(),
+  endMinute: int("end_minute").notNull(),
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+}, (table) => [index("saved_slots_owner_idx").on(table.owner)]);
+
+export type SavedSlot = typeof savedSlots.$inferSelect;
